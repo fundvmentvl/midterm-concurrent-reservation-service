@@ -1,82 +1,116 @@
 package concurrent_reservation_service.service;
+import concurrent_reservation_service.audit.AsyncAuditService;
 import concurrent_reservation_service.model.Reservation;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import java.util.concurrent.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 class ReservationServiceTest {
     private ReservationService service;
+    private AsyncAuditService auditService;
     @BeforeEach
     void setUp() {
-        service = new ReservationService();
+        auditService = mock(AsyncAuditService.class);
+        service = new ReservationService(auditService);
+    }
+    @Test
+    void shouldReturnFourAvailableSlots() {
+        assertEquals(4, service.getAvailableSlots().size());
     }
     @Test
     void shouldBookAvailableAppointment() {
         Reservation reservation =
-                service.bookAppointment("SLOT-001", "Student A");
+                service.bookAppointment("SLOT-001", "Customer A");
         assertNotNull(reservation.id());
         assertEquals("SLOT-001", reservation.appointmentSlotId());
-        assertEquals("Student A", reservation.customerName());
+        assertEquals("Customer A", reservation.customerName());
+        assertEquals(3, service.getAvailableSlots().size());
+        verify(auditService).logEvent(
+                eq("BOOKING_CREATED"),
+                contains("SLOT-001")
+        );
     }
     @Test
-    void shouldPreventDoubleBooking() {
-        service.bookAppointment("SLOT-001", "Student A");
-        assertThrows(IllegalStateException.class,
-                () -> service.bookAppointment("SLOT-001", "Student B"));
+    void shouldRejectDuplicateBooking() {
+        service.bookAppointment("SLOT-001", "Customer A");
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.bookAppointment(
+                        "SLOT-001", "Customer B")
+        );
+        assertEquals(
+                "Appointment slot is already reserved",
+                exception.getMessage()
+        );
     }
     @Test
     void shouldRejectInvalidSlot() {
-        assertThrows(IllegalArgumentException.class,
-                () -> service.bookAppointment("INVALID", "Student A"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> service.bookAppointment(
+                        "INVALID", "Customer A")
+        );
     }
     @Test
     void shouldRejectBlankCustomerName() {
-        assertThrows(IllegalArgumentException.class,
-                () -> service.bookAppointment("SLOT-001", " "));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> service.bookAppointment("SLOT-001", " ")
+        );
     }
     @Test
-    void shouldReleaseSlotAfterCancellation() {
+    void shouldRetrieveReservation() {
         Reservation reservation =
-                service.bookAppointment("SLOT-001", "Student A");
-        service.cancelReservation(reservation.id());
-        Reservation newReservation =
-                service.bookAppointment("SLOT-001", "Student B");
-        assertNotNull(newReservation);
-        assertEquals("Student B", newReservation.customerName());
+                service.bookAppointment("SLOT-001", "Customer A");
+        Reservation retrieved =
+                service.getReservation(reservation.id());
+        assertEquals(reservation.id(), retrieved.id());
     }
     @Test
-    void shouldAllowOnlyOneConcurrentReservation() throws Exception {
+    void shouldCancelReservationAndRestoreAvailability() {
+        Reservation reservation =
+                service.bookAppointment("SLOT-001", "Customer A");
+        service.cancelReservation(reservation.id());
+        assertEquals(4, service.getAvailableSlots().size());
+        verify(auditService).logEvent(
+                eq("BOOKING_CANCELLED"),
+                contains(reservation.id())
+        );
+    }
+    @Test
+    void shouldAllowOnlyOneConcurrentBooking() throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
-        Callable<Boolean> bookingTask = () -> {
-            ready.countDown();
-            start.await();
-            try {
-                service.bookAppointment(
-                        "SLOT-001",
-                        Thread.currentThread().getName()
-                );
-                return true;
-            } catch (IllegalStateException e) {
-                return false;
-            }
-        };
         try {
-            Future<Boolean> first = executor.submit(bookingTask);
-            Future<Boolean> second = executor.submit(bookingTask);
+            java.util.concurrent.Callable<Boolean> booking = () -> {
+                ready.countDown();
+                start.await();
+                try {
+                    service.bookAppointment(
+                            "SLOT-001",
+                            Thread.currentThread().getName()
+                    );
+                    return true;
+                } catch (IllegalStateException ex) {
+                    return false;
+                }
+            };
+            Future<Boolean> first = executor.submit(booking);
+            Future<Boolean> second = executor.submit(booking);
             assertTrue(ready.await(5, TimeUnit.SECONDS));
             start.countDown();
-            int successes = 0;
-            if (first.get(5, TimeUnit.SECONDS)) {
-                successes++;
-            }
-            if (second.get(5, TimeUnit.SECONDS)) {
-                successes++;
-            }
-            assertEquals(1, successes,
-                    "Only one client should reserve the final slot");
+            int successfulBookings =
+                    (first.get(5, TimeUnit.SECONDS) ? 1 : 0)
+                            + (second.get(5, TimeUnit.SECONDS) ? 1 : 0);
+            assertEquals(1, successfulBookings);
             assertEquals(1, service.getAllReservations().size());
+            assertEquals(3, service.getAvailableSlots().size());
         } finally {
             start.countDown();
             executor.shutdownNow();
