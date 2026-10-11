@@ -1,4 +1,11 @@
-package model;
+package concurrent_reservation_service.model;
+import java.time.LocalDate;
+import java.time.LocalTime;
 
-public class AppointmentSlot {
+public record AppointmentSlot(
+        String id,
+        LocalDate date,
+        LocalTime startTime,
+        LocalTime endTime
+) {
 }
