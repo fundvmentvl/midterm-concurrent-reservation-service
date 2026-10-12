@@ -126,4 +126,28 @@ class ReservationServiceTest {
         service.bookAppointment("SLOT-001", "Customer A");
         verify(reservationStore).save(anyList());
     }
+    @Test
+    void shouldRejectCancellationOfUnknownReservation() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> service.cancelReservation("INVALID-ID")
+        );
+    }
+    @Test
+    void shouldRejectDuplicateCancellation() {
+        Reservation reservation =
+                service.bookAppointment("SLOT-001", "Customer A");
+        service.cancelReservation(reservation.id());
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> service.cancelReservation(reservation.id())
+        );
+    }
+    @Test
+    void shouldRejectWhitespaceOnlyCustomerName() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> service.bookAppointment("SLOT-001", "   ")
+        );
+    }
 }
