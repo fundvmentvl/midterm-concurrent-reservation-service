@@ -29,3 +29,7 @@ target
 # IntelliJ IDEA
 .idea/
 *.iml
+
+# Generated reservation data
+/data/reservations.json
+/data/reservations.csv

@@ -1,8 +1,10 @@
 package concurrent_reservation_service.service;
 import concurrent_reservation_service.audit.AsyncAuditService;
 import concurrent_reservation_service.model.Reservation;
+import concurrent_reservation_service.persistence.ReservationStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -13,10 +15,13 @@ import static org.mockito.Mockito.*;
 class ReservationServiceTest {
     private ReservationService service;
     private AsyncAuditService auditService;
+    private ReservationStore reservationStore;
     @BeforeEach
     void setUp() {
         auditService = mock(AsyncAuditService.class);
-        service = new ReservationService(auditService);
+        reservationStore = mock(ReservationStore.class);
+        when(reservationStore.load()).thenReturn(List.of());
+        service = new ReservationService(auditService, reservationStore);
     }
     @Test
     void shouldReturnFourAvailableSlots() {
@@ -115,5 +120,10 @@ class ReservationServiceTest {
             start.countDown();
             executor.shutdownNow();
         }
+    }
+    @Test
+    void shouldSaveReservationAfterBooking() {
+        service.bookAppointment("SLOT-001", "Customer A");
+        verify(reservationStore).save(anyList());
     }
 }
